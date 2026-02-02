@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "japanese-design": {
+      "command": "node",
+      "args": ["/Users/robertpaszek/Desktop/Developer/Cluster_MVP/japanese-design-books/mcp-server/index.js"],
+      "description": "Japanese design principles, patterns, and design tokens"
+    },
+    "japanese-wisdom": {
+      "command": "python",
+      "args": ["/Users/robertpaszek/Desktop/Developer/Cluster_MVP/tools/japanese-wisdom-mcp/server.py"],
+      "description": "152 knowledge units from Japanese aesthetics books (wabi-sabi, iki, minimalism, Zen)"
+    }
+  }
+}
