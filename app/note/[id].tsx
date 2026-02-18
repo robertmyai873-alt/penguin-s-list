@@ -1,12 +1,17 @@
-import { useState, useEffect } from 'react';
-import { View, Text, ScrollView, Pressable, Alert } from 'react-native';
+import { useState, useEffect, useRef } from 'react';
+import { View, Text, TextInput, ScrollView, Pressable, Alert } from 'react-native';
 import { useLocalSearchParams, router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useSQLiteContext } from 'expo-sqlite';
 import { Ionicons } from '@expo/vector-icons';
+import * as Clipboard from 'expo-clipboard';
+import Animated, { FadeIn, Easing } from 'react-native-reanimated';
 import { Note, getNoteById, deleteNote, getNotes, updateNote } from '../../db/queries';
 import { DatePickerModal } from '../../components/DatePickerModal';
 import theme from '../../constants/theme';
+
+const DURATION_SWIFT = 200;
+const EASE_GENTLE = Easing.bezier(0.4, 0, 0.2, 1);
 
 function getToday(): string {
   return new Date().toISOString().split('T')[0];
@@ -26,12 +31,20 @@ export default function NoteDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const db = useSQLiteContext();
   const insets = useSafeAreaInsets();
+  const editInputRef = useRef<TextInput>(null);
 
   const [note, setNote] = useState<Note | null>(null);
   const [noteIndex, setNoteIndex] = useState<number>(0);
   const [loading, setLoading] = useState(true);
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [selectedDate, setSelectedDate] = useState(getToday());
+
+  // Edit state
+  const [isEditing, setIsEditing] = useState(false);
+  const [editText, setEditText] = useState('');
+
+  // Copy feedback state
+  const [justCopied, setJustCopied] = useState(false);
 
   useEffect(() => {
     loadNote();
@@ -51,11 +64,12 @@ export default function NoteDetailScreen() {
       setSelectedDate(getToday());
     }
 
-    // Get the index of this note
+    // Get the index of this note in the full sorted list
     const allNotes = await getNotes(db);
-    const reversedNotes = [...allNotes].reverse();
-    const index = reversedNotes.findIndex(n => n.id === parseInt(id));
-    setNoteIndex(index + 1);
+    const index = allNotes.findIndex(n => n.id === parseInt(id));
+    // Notes are sorted by sort_order ASC, so index 0 is the top note
+    // Display number = total - index (top note = highest number)
+    setNoteIndex(allNotes.length - index);
 
     setLoading(false);
   };
@@ -104,6 +118,36 @@ export default function NoteDetailScreen() {
     );
   };
 
+  const handleEditStart = () => {
+    if (!note) return;
+    setEditText(note.content);
+    setIsEditing(true);
+    setTimeout(() => {
+      editInputRef.current?.focus();
+    }, 100);
+  };
+
+  const handleEditSave = async () => {
+    if (!note || !editText.trim()) return;
+    await updateNote(db, note.id, { content: editText.trim() });
+    setNote({ ...note, content: editText.trim() });
+    setIsEditing(false);
+  };
+
+  const handleEditCancel = () => {
+    setIsEditing(false);
+    setEditText('');
+  };
+
+  const handleCopy = async () => {
+    if (!note) return;
+    await Clipboard.setStringAsync(note.content);
+    setJustCopied(true);
+    setTimeout(() => {
+      setJustCopied(false);
+    }, 1500);
+  };
+
   if (loading) {
     return (
       <View className="flex-1 bg-washi items-center justify-center">
@@ -130,7 +174,7 @@ export default function NoteDetailScreen() {
 
   return (
     <View className="flex-1 bg-washi" style={{ paddingTop: insets.top }}>
-      {/* Minimal Header - just a back arrow */}
+      {/* Header - back, copy, edit, delete */}
       <View className="flex-row items-center justify-between px-6 py-4">
         <Pressable
           onPress={() => router.back()}
@@ -140,14 +184,38 @@ export default function NoteDetailScreen() {
           <Ionicons name="arrow-back" size={20} color={theme.colors.sumi} />
         </Pressable>
 
-        {/* Delete as subtle action */}
-        <Pressable
-          onPress={handleDelete}
-          className="p-2 -mr-2"
-          hitSlop={16}
-        >
-          <Ionicons name="close" size={20} color={theme.colors.sumiLight} />
-        </Pressable>
+        <View className="flex-row items-center gap-4">
+          {/* Copy button */}
+          <Pressable
+            onPress={handleCopy}
+            className="p-2"
+            hitSlop={16}
+          >
+            <Ionicons
+              name={justCopied ? 'checkmark' : 'copy-outline'}
+              size={18}
+              color={justCopied ? theme.colors.moegi : theme.colors.sumiLight}
+            />
+          </Pressable>
+
+          {/* Edit button */}
+          <Pressable
+            onPress={handleEditStart}
+            className="p-2"
+            hitSlop={16}
+          >
+            <Ionicons name="pencil-outline" size={18} color={theme.colors.sumiLight} />
+          </Pressable>
+
+          {/* Delete button */}
+          <Pressable
+            onPress={handleDelete}
+            className="p-2 -mr-2"
+            hitSlop={16}
+          >
+            <Ionicons name="close" size={20} color={theme.colors.sumiLight} />
+          </Pressable>
+        </View>
       </View>
 
       <ScrollView
@@ -162,10 +230,31 @@ export default function NoteDetailScreen() {
           {noteIndex}
         </Text>
 
-        {/* The gratitude content - generous breathing room */}
-        <Text className="font-nunito text-sumi text-xl leading-9 mb-8">
-          {note.content}
-        </Text>
+        {/* The gratitude content - editable or display */}
+        {isEditing ? (
+          <Animated.View entering={FadeIn.duration(DURATION_SWIFT).easing(EASE_GENTLE)}>
+            <TextInput
+              ref={editInputRef}
+              className="font-nunito text-sumi text-xl leading-9 mb-4 min-h-[120px]"
+              value={editText}
+              onChangeText={setEditText}
+              multiline
+              textAlignVertical="top"
+            />
+            <View className="flex-row items-center gap-8 mb-8">
+              <Pressable onPress={handleEditCancel} className="py-3 px-2">
+                <Text className="font-nunito text-sumi-light text-base">cancel</Text>
+              </Pressable>
+              <Pressable onPress={handleEditSave} className="py-3 px-2">
+                <Text className="font-nunito-semibold text-moegi text-base">save</Text>
+              </Pressable>
+            </View>
+          </Animated.View>
+        ) : (
+          <Text className="font-nunito text-sumi text-xl leading-9 mb-8">
+            {note.content}
+          </Text>
+        )}
 
         {/* Date at the bottom - tappable to add/change date */}
         <Pressable

@@ -1,7 +1,7 @@
 import { SQLiteDatabase } from 'expo-sqlite';
 import { seedNotes } from './seed-notes';
 
-const CURRENT_DB_VERSION = 2;
+const CURRENT_DB_VERSION = 3;
 
 export async function initDatabase(db: SQLiteDatabase): Promise<void> {
   // Get current version
@@ -23,6 +23,7 @@ export async function initDatabase(db: SQLiteDatabase): Promise<void> {
         content TEXT NOT NULL,
         date TEXT,
         image_uri TEXT,
+        sort_order INTEGER DEFAULT 0,
         created_at TEXT DEFAULT CURRENT_TIMESTAMP,
         updated_at TEXT DEFAULT CURRENT_TIMESTAMP
       );
@@ -35,6 +36,10 @@ export async function initDatabase(db: SQLiteDatabase): Promise<void> {
 
     await db.execAsync(`
       CREATE INDEX IF NOT EXISTS idx_notes_content ON notes(content);
+    `);
+
+    await db.execAsync(`
+      CREATE INDEX IF NOT EXISTS idx_notes_sort_order ON notes(sort_order ASC);
     `);
 
     // Seed with pre-existing notes (unknown dates)
@@ -78,9 +83,36 @@ export async function initDatabase(db: SQLiteDatabase): Promise<void> {
 
     // Seed with pre-existing notes (unknown dates)
     await seedInitialNotes(db);
-
-    await db.execAsync(`PRAGMA user_version = ${CURRENT_DB_VERSION}`);
   }
+
+  // Migration v2 → v3: Add sort_order column
+  if (currentVersion < 3) {
+    // Check if sort_order column already exists (defensive)
+    const columns = await db.getAllAsync<{ name: string }>(
+      `PRAGMA table_info(notes)`
+    );
+    const hasSortOrder = columns.some(col => col.name === 'sort_order');
+
+    if (!hasSortOrder) {
+      await db.execAsync(`ALTER TABLE notes ADD COLUMN sort_order INTEGER DEFAULT 0`);
+    }
+
+    // Backfill sort_order based on created_at DESC (newest = 0, next = 1, etc.)
+    await db.execAsync(`
+      UPDATE notes SET sort_order = (
+        SELECT rn FROM (
+          SELECT id, ROW_NUMBER() OVER (ORDER BY created_at DESC) - 1 AS rn FROM notes
+        ) ranked WHERE ranked.id = notes.id
+      )
+    `);
+
+    // Create index for sort_order
+    await db.execAsync(`
+      CREATE INDEX IF NOT EXISTS idx_notes_sort_order ON notes(sort_order ASC);
+    `);
+  }
+
+  await db.execAsync(`PRAGMA user_version = ${CURRENT_DB_VERSION}`);
 }
 
 // Seed the database with pre-existing gratitude notes (with unknown dates)

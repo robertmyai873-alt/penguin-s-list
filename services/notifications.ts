@@ -67,7 +67,7 @@ export async function saveNotificationSettings(
   ]);
 }
 
-// Schedule the daily notification
+// Schedule the next notification (one-shot for the next occurrence of hour:minute)
 export async function scheduleDailyNotification(
   hour: number,
   minute: number,
@@ -76,7 +76,18 @@ export async function scheduleDailyNotification(
   // Cancel any existing scheduled notifications first
   await cancelAllNotifications();
 
-  // Schedule at the specified time daily
+  // Calculate the next occurrence of the target time
+  const now = new Date();
+  const next = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hour, minute, 0);
+
+  // If the target time already passed today, schedule for tomorrow
+  if (next.getTime() <= now.getTime()) {
+    next.setDate(next.getDate() + 1);
+  }
+
+  const secondsUntil = Math.max(1, Math.round((next.getTime() - now.getTime()) / 1000));
+
+  // Schedule a one-shot notification — on next app open we reschedule with a new random note
   const identifier = await Notifications.scheduleNotificationAsync({
     content: {
       title: 'Gratitude reminder',
@@ -84,9 +95,9 @@ export async function scheduleDailyNotification(
       data: { type: 'daily_gratitude' },
     },
     trigger: {
-      type: Notifications.SchedulableTriggerInputTypes.DAILY,
-      hour,
-      minute,
+      type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
+      seconds: secondsUntil,
+      repeats: false,
     },
   });
 
@@ -104,6 +115,19 @@ export function formatTime(hour: number, minute: number): string {
   const displayHour = hour % 12 || 12;
   const displayMinute = minute.toString().padStart(2, '0');
   return `${displayHour}:${displayMinute} ${period}`;
+}
+
+// Reschedule with a fresh random note (call on every app open)
+export async function rescheduleIfEnabled(
+  getRandomContent: () => Promise<string | null>
+): Promise<void> {
+  const settings = await getNotificationSettings();
+  if (!settings.enabled) return;
+
+  const content = await getRandomContent();
+  if (!content) return;
+
+  await scheduleDailyNotification(settings.hour, settings.minute, content);
 }
 
 // Check if notifications are available on this device

@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useMemo } from 'react';
+import { useState, useCallback, useRef, useMemo, useEffect } from 'react';
 import {
   View,
   Text,
@@ -21,7 +21,11 @@ import Animated, {
   FadeIn,
   Easing,
 } from 'react-native-reanimated';
-import { Note, getNotes, createNote, DateRange } from '../db/queries';
+import DraggableFlatList, {
+  ScaleDecorator,
+  RenderItemParams,
+} from 'react-native-draggable-flatlist';
+import { Note, getNotes, createNote, updateNoteOrder, DateRange } from '../db/queries';
 import { DatePickerModal } from '../components/DatePickerModal';
 import { DateRangePickerModal } from '../components/DateRangePickerModal';
 import theme from '../constants/theme';
@@ -39,12 +43,13 @@ const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
 interface KizenButtonProps {
   onPress?: () => void;
+  onLongPress?: () => void;
   children: React.ReactNode;
   className?: string;
   disabled?: boolean;
 }
 
-function KizenButton({ onPress, children, className, disabled }: KizenButtonProps) {
+function KizenButton({ onPress, onLongPress, children, className, disabled }: KizenButtonProps) {
   const scale = useSharedValue(1);
   const opacity = useSharedValue(1);
 
@@ -68,6 +73,7 @@ function KizenButton({ onPress, children, className, disabled }: KizenButtonProp
   return (
     <AnimatedPressable
       onPress={onPress}
+      onLongPress={onLongPress}
       onPressIn={handlePressIn}
       onPressOut={handlePressOut}
       disabled={disabled}
@@ -122,7 +128,7 @@ export default function HomeScreen() {
   const db = useSQLiteContext();
   const insets = useSafeAreaInsets();
   const inputRef = useRef<TextInput>(null);
-  const listRef = useRef<FlatList<Note>>(null);
+  const searchInputRef = useRef<TextInput>(null);
 
   const [notes, setNotes] = useState<Note[]>([]);
   const [isAdding, setIsAdding] = useState(false);
@@ -134,14 +140,31 @@ export default function HomeScreen() {
   const [dateRange, setDateRange] = useState<DateRange | null>(null);
   const [showRangePicker, setShowRangePicker] = useState(false);
 
+  // Search state
+  const [isSearching, setIsSearching] = useState(false);
+  const [searchText, setSearchText] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+
   // Smart animation: track which notes we've already seen
   // This prevents re-triggering FadeIn on existing notes
   const seenNoteIds = useRef<Set<number>>(new Set());
 
+  // Whether drag-reorder is allowed (only when no filters active)
+  const isDragEnabled = !dateRange && !debouncedSearch;
+
+  // Debounce search input
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(searchText);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchText]);
+
   const fetchNotes = useCallback(async () => {
-    const data = await getNotes(db, undefined, dateRange || undefined);
+    const searchQuery = debouncedSearch.trim() || undefined;
+    const data = await getNotes(db, searchQuery, dateRange || undefined);
     setNotes(data);
-  }, [db, dateRange]);
+  }, [db, dateRange, debouncedSearch]);
 
   useFocusEffect(
     useCallback(() => {
@@ -202,6 +225,26 @@ export default function HomeScreen() {
     setDateRange(null);
   }, []);
 
+  const handleSearchOpen = useCallback(() => {
+    setIsSearching(true);
+    setDateRange(null); // Clear date filter when searching
+    setTimeout(() => {
+      searchInputRef.current?.focus();
+    }, 100);
+  }, []);
+
+  const handleSearchClose = useCallback(() => {
+    setIsSearching(false);
+    setSearchText('');
+    setDebouncedSearch('');
+  }, []);
+
+  const handleDragEnd = useCallback(async ({ data }: { data: Note[] }) => {
+    setNotes(data);
+    const orderedIds = data.map(n => n.id);
+    await updateNoteOrder(db, orderedIds);
+  }, [db]);
+
   // Newest first - new notes appear right below input
   const sortedNotes = notes;
 
@@ -219,7 +262,7 @@ export default function HomeScreen() {
     return newIds;
   }, [sortedNotes]);
 
-  // Render individual note item (extracted for FlatList)
+  // Render individual note item for regular FlatList
   const renderNoteItem = useCallback(({ item: note, index }: ListRenderItemInfo<Note>) => {
     const isNew = newNoteIds.has(note.id);
     const noteNumber = sortedNotes.length - index;
@@ -257,43 +300,119 @@ export default function HomeScreen() {
     );
   }, [newNoteIds, sortedNotes.length]);
 
+  // Render individual note item for DraggableFlatList
+  const renderDraggableItem = useCallback(({ item: note, drag, isActive, getIndex }: RenderItemParams<Note>) => {
+    const index = getIndex() ?? 0;
+    const noteNumber = sortedNotes.length - index;
+
+    return (
+      <ScaleDecorator>
+        <Link href={`/note/${note.id}`} asChild>
+          <KizenButton
+            onLongPress={drag}
+            disabled={isActive}
+            className={`flex-row items-start mb-8 ${isActive ? 'opacity-90' : ''}`}
+          >
+            <View className="flex-1 pr-4">
+              <Text className="font-nunito text-moegi text-sm mb-2">
+                {noteNumber}
+              </Text>
+              <Text className="font-nunito text-sumi text-base leading-7">
+                {note.content}
+              </Text>
+            </View>
+            <View className="flex-row items-center mt-6">
+              {!note.date && (
+                <Ionicons
+                  name="calendar-outline"
+                  size={10}
+                  color={theme.colors.sumiLight}
+                  style={{ marginRight: 2, opacity: 0.5 }}
+                />
+              )}
+              <Text className={`font-nunito text-xs ${note.date ? 'text-sumi-light' : 'text-sumi-light opacity-50'}`}>
+                {formatDateCompact(note.date)}
+              </Text>
+            </View>
+          </KizenButton>
+        </Link>
+      </ScaleDecorator>
+    );
+  }, [sortedNotes.length]);
+
   // Header component for FlatList (includes title, input area, etc.)
   const ListHeader = useMemo(() => (
     <>
       {/* Header row - Title and actions */}
       <View className="flex-row items-center justify-between mb-2">
-        <Text className="font-nunito text-sumi text-base leading-6">
-          a list I made with reasons{'\n'}that are worth staying alive
-        </Text>
-
-        <View className="flex-row items-center gap-3">
-          {/* Date range filter button */}
-          {dateRange ? (
+        {isSearching ? (
+          <Animated.View
+            className="flex-1 flex-row items-center mr-3"
+            entering={FadeIn.duration(DURATION_SWIFT).easing(EASE_GENTLE)}
+          >
+            <Ionicons name="search" size={16} color={theme.colors.sumiLight} />
+            <TextInput
+              ref={searchInputRef}
+              className="flex-1 font-nunito text-sumi text-base ml-2 py-1"
+              placeholder="search..."
+              placeholderTextColor={theme.colors.sumiLight}
+              value={searchText}
+              onChangeText={setSearchText}
+              autoCapitalize="none"
+              autoCorrect={false}
+              returnKeyType="search"
+            />
             <Pressable
-              onPress={clearFilter}
-              className="flex-row items-center active:opacity-60"
-            >
-              <Text className="font-nunito text-moegi text-xs mr-1">
-                {formatDateRange(dateRange)}
-              </Text>
-              <Ionicons name="close" size={14} color={theme.colors.moegi} />
-            </Pressable>
-          ) : (
-            <Pressable
-              onPress={() => setShowRangePicker(true)}
+              onPress={handleSearchClose}
               className="p-1 active:opacity-60"
             >
-              <Ionicons name="calendar-outline" size={18} color={theme.colors.sumiLight} />
+              <Ionicons name="close" size={18} color={theme.colors.sumiLight} />
             </Pressable>
-          )}
+          </Animated.View>
+        ) : (
+          <>
+            <Text className="font-nunito text-sumi text-base leading-6">
+              a list I made with reasons{'\n'}that are worth staying alive
+            </Text>
 
-          {/* Settings button */}
-          <Link href="/settings" asChild>
-            <Pressable className="p-1 active:opacity-60">
-              <Ionicons name="settings-outline" size={18} color={theme.colors.sumiLight} />
-            </Pressable>
-          </Link>
-        </View>
+            <View className="flex-row items-center gap-3">
+              {/* Search button */}
+              <Pressable
+                onPress={handleSearchOpen}
+                className="p-1 active:opacity-60"
+              >
+                <Ionicons name="search-outline" size={18} color={theme.colors.sumiLight} />
+              </Pressable>
+
+              {/* Date range filter button */}
+              {dateRange ? (
+                <Pressable
+                  onPress={clearFilter}
+                  className="flex-row items-center active:opacity-60"
+                >
+                  <Text className="font-nunito text-moegi text-xs mr-1">
+                    {formatDateRange(dateRange)}
+                  </Text>
+                  <Ionicons name="close" size={14} color={theme.colors.moegi} />
+                </Pressable>
+              ) : (
+                <Pressable
+                  onPress={() => setShowRangePicker(true)}
+                  className="p-1 active:opacity-60"
+                >
+                  <Ionicons name="calendar-outline" size={18} color={theme.colors.sumiLight} />
+                </Pressable>
+              )}
+
+              {/* Settings button */}
+              <Link href="/settings" asChild>
+                <Pressable className="p-1 active:opacity-60">
+                  <Ionicons name="settings-outline" size={18} color={theme.colors.sumiLight} />
+                </Pressable>
+              </Link>
+            </View>
+          </>
+        )}
       </View>
 
       {/* Subtle divider */}
@@ -350,7 +469,7 @@ export default function HomeScreen() {
       )}
 
     </>
-  ), [dateRange, isAdding, inputText, selectedDate, sortedNotes.length, handleCancel, handleAdd, handlePlusPress, clearFilter]);
+  ), [dateRange, isAdding, inputText, selectedDate, sortedNotes.length, handleCancel, handleAdd, handlePlusPress, clearFilter, isSearching, searchText, handleSearchOpen, handleSearchClose]);
 
   // Empty state component
   const ListEmpty = useMemo(() => {
@@ -358,18 +477,31 @@ export default function HomeScreen() {
     return (
       <View className="flex-1 items-center justify-center py-16">
         <Text className="font-nunito text-sumi-light text-center text-base leading-relaxed">
-          {dateRange
+          {debouncedSearch
+            ? `no notes found`
+            : dateRange
             ? `No notes in this period`
             : "Start adding your\ngratitude notes"}
         </Text>
-        {dateRange && (
+        {debouncedSearch ? (
+          <Pressable onPress={handleSearchClose} className="mt-4">
+            <Text className="font-nunito text-moegi text-sm">clear search</Text>
+          </Pressable>
+        ) : dateRange ? (
           <Pressable onPress={clearFilter} className="mt-4">
             <Text className="font-nunito text-moegi text-sm">clear filter</Text>
           </Pressable>
-        )}
+        ) : null}
       </View>
     );
-  }, [dateRange, isAdding, clearFilter]);
+  }, [dateRange, debouncedSearch, isAdding, clearFilter, handleSearchClose]);
+
+  const contentContainerStyle = useMemo(() => ({
+    paddingTop: insets.top + 48,
+    paddingBottom: insets.bottom + 32,
+    paddingHorizontal: 32,
+    flexGrow: 1,
+  }), [insets.top, insets.bottom]);
 
   return (
     <View className="flex-1 bg-washi">
@@ -377,26 +509,35 @@ export default function HomeScreen() {
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         className="flex-1"
       >
-        <FlatList
-          ref={listRef}
-          data={sortedNotes}
-          renderItem={renderNoteItem}
-          keyExtractor={(item) => item.id.toString()}
-          ListHeaderComponent={ListHeader}
-          ListEmptyComponent={ListEmpty}
-          contentContainerStyle={{
-            paddingTop: insets.top + 48,
-            paddingBottom: insets.bottom + 32,
-            paddingHorizontal: 32,
-            flexGrow: 1,
-          }}
-          keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={false}
-          // Performance optimizations
-          removeClippedSubviews={true}
-          maxToRenderPerBatch={10}
-          windowSize={10}
-        />
+        {isDragEnabled ? (
+          <DraggableFlatList
+            data={sortedNotes}
+            renderItem={renderDraggableItem}
+            keyExtractor={(item) => item.id.toString()}
+            onDragEnd={handleDragEnd}
+            ListHeaderComponent={ListHeader}
+            ListEmptyComponent={ListEmpty}
+            contentContainerStyle={contentContainerStyle}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+            autoscrollSpeed={1600}
+            autoscrollThreshold={150}
+          />
+        ) : (
+          <FlatList
+            data={sortedNotes}
+            renderItem={renderNoteItem}
+            keyExtractor={(item) => item.id.toString()}
+            ListHeaderComponent={ListHeader}
+            ListEmptyComponent={ListEmpty}
+            contentContainerStyle={contentContainerStyle}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+            removeClippedSubviews={true}
+            maxToRenderPerBatch={10}
+            windowSize={10}
+          />
+        )}
       </KeyboardAvoidingView>
 
       {/* Date Picker Modal - for new note */}

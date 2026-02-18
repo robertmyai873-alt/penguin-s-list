@@ -5,6 +5,7 @@ export interface Note {
   content: string;
   date: string | null; // null = unknown date
   image_uri: string | null;
+  sort_order: number;
   created_at: string;
   updated_at: string;
 }
@@ -60,7 +61,7 @@ export async function getNotes(
   }
 
   return await db.getAllAsync<Note>(
-    `SELECT * FROM notes ORDER BY created_at DESC`
+    `SELECT * FROM notes ORDER BY sort_order ASC`
   );
 }
 
@@ -83,13 +84,16 @@ export async function getNoteById(
   );
 }
 
-// Create a new note
+// Create a new note (inserts at top with sort_order = 0, bumps existing)
 export async function createNote(
   db: SQLiteDatabase,
   input: CreateNoteInput
 ): Promise<number> {
+  // Bump all existing notes' sort_order by 1
+  await db.runAsync('UPDATE notes SET sort_order = sort_order + 1');
+
   const result = await db.runAsync(
-    'INSERT INTO notes (content, date, image_uri) VALUES (?, ?, ?)',
+    'INSERT INTO notes (content, date, image_uri, sort_order) VALUES (?, ?, ?, 0)',
     [input.content, input.date ?? null, input.image_uri ?? null]
   );
 
@@ -137,6 +141,19 @@ export async function deleteNote(
   id: number
 ): Promise<void> {
   await db.runAsync('DELETE FROM notes WHERE id = ?', [id]);
+}
+
+// Update sort_order for all notes based on their position in the array
+export async function updateNoteOrder(
+  db: SQLiteDatabase,
+  orderedIds: number[]
+): Promise<void> {
+  for (let i = 0; i < orderedIds.length; i++) {
+    await db.runAsync(
+      'UPDATE notes SET sort_order = ? WHERE id = ?',
+      [i, orderedIds[i]]
+    );
+  }
 }
 
 // Get a random note (for notifications)
