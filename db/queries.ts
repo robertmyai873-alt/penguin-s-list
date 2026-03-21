@@ -1,4 +1,4 @@
-import { SQLiteDatabase } from 'expo-sqlite';
+import { SQLiteDatabase } from "expo-sqlite";
 
 export interface Note {
   id: number;
@@ -33,13 +33,13 @@ export async function getNotes(
   db: SQLiteDatabase,
   searchQuery?: string,
   dateRange?: DateRange,
-  includeUnknownDates: boolean = true
+  includeUnknownDates: boolean = true,
 ): Promise<Note[]> {
   // Filter by date range (excludes unknown dates)
   if (dateRange) {
     return await db.getAllAsync<Note>(
-      'SELECT * FROM notes WHERE date >= ? AND date <= ? ORDER BY date DESC, created_at DESC',
-      [dateRange.from, dateRange.to]
+      "SELECT * FROM notes WHERE date >= ? AND date <= ? ORDER BY date DESC, created_at DESC",
+      [dateRange.from, dateRange.to],
     );
   }
 
@@ -49,52 +49,49 @@ export async function getNotes(
     return await db.getAllAsync<Note>(
       `SELECT * FROM notes WHERE content LIKE ?
        ORDER BY CASE WHEN date IS NULL THEN 1 ELSE 0 END, date DESC, created_at DESC`,
-      [query]
+      [query],
     );
   }
 
   // Get all notes - dated notes first (sorted by date), then unknown dates
   if (!includeUnknownDates) {
     return await db.getAllAsync<Note>(
-      'SELECT * FROM notes WHERE date IS NOT NULL ORDER BY date DESC, created_at DESC'
+      "SELECT * FROM notes WHERE date IS NOT NULL ORDER BY date DESC, created_at DESC",
     );
   }
 
   return await db.getAllAsync<Note>(
-    `SELECT * FROM notes ORDER BY sort_order ASC`
+    `SELECT * FROM notes ORDER BY sort_order ASC`,
   );
 }
 
 // Get all unique dates that have notes (for date picker)
 export async function getNoteDates(db: SQLiteDatabase): Promise<string[]> {
   const results = await db.getAllAsync<{ date: string }>(
-    'SELECT DISTINCT date FROM notes ORDER BY date DESC'
+    "SELECT DISTINCT date FROM notes ORDER BY date DESC",
   );
-  return results.map(r => r.date);
+  return results.map((r) => r.date);
 }
 
 // Get a single note by ID
 export async function getNoteById(
   db: SQLiteDatabase,
-  id: number
+  id: number,
 ): Promise<Note | null> {
-  return await db.getFirstAsync<Note>(
-    'SELECT * FROM notes WHERE id = ?',
-    [id]
-  );
+  return await db.getFirstAsync<Note>("SELECT * FROM notes WHERE id = ?", [id]);
 }
 
 // Create a new note (inserts at top with sort_order = 0, bumps existing)
 export async function createNote(
   db: SQLiteDatabase,
-  input: CreateNoteInput
+  input: CreateNoteInput,
 ): Promise<number> {
   // Bump all existing notes' sort_order by 1
-  await db.runAsync('UPDATE notes SET sort_order = sort_order + 1');
+  await db.runAsync("UPDATE notes SET sort_order = sort_order + 1");
 
   const result = await db.runAsync(
-    'INSERT INTO notes (content, date, image_uri, sort_order) VALUES (?, ?, ?, 0)',
-    [input.content, input.date ?? null, input.image_uri ?? null]
+    "INSERT INTO notes (content, date, image_uri, sort_order) VALUES (?, ?, ?, 0)",
+    [input.content, input.date ?? null, input.image_uri ?? null],
   );
 
   return result.lastInsertRowId;
@@ -104,61 +101,104 @@ export async function createNote(
 export async function updateNote(
   db: SQLiteDatabase,
   id: number,
-  input: UpdateNoteInput
+  input: UpdateNoteInput,
 ): Promise<void> {
   const updates: string[] = [];
   const values: (string | null)[] = [];
 
   if (input.content !== undefined) {
-    updates.push('content = ?');
+    updates.push("content = ?");
     values.push(input.content);
   }
 
   if (input.date !== undefined) {
-    updates.push('date = ?');
+    updates.push("date = ?");
     values.push(input.date);
   }
 
   if (input.image_uri !== undefined) {
-    updates.push('image_uri = ?');
+    updates.push("image_uri = ?");
     values.push(input.image_uri);
   }
 
   if (updates.length === 0) return;
 
-  updates.push('updated_at = CURRENT_TIMESTAMP');
+  updates.push("updated_at = CURRENT_TIMESTAMP");
   values.push(id.toString());
 
   await db.runAsync(
-    `UPDATE notes SET ${updates.join(', ')} WHERE id = ?`,
-    values
+    `UPDATE notes SET ${updates.join(", ")} WHERE id = ?`,
+    values,
   );
 }
 
 // Delete a note
 export async function deleteNote(
   db: SQLiteDatabase,
-  id: number
+  id: number,
 ): Promise<void> {
-  await db.runAsync('DELETE FROM notes WHERE id = ?', [id]);
+  await db.runAsync("DELETE FROM notes WHERE id = ?", [id]);
 }
 
 // Update sort_order for all notes based on their position in the array
 export async function updateNoteOrder(
   db: SQLiteDatabase,
-  orderedIds: number[]
+  orderedIds: number[],
 ): Promise<void> {
   for (let i = 0; i < orderedIds.length; i++) {
-    await db.runAsync(
-      'UPDATE notes SET sort_order = ? WHERE id = ?',
-      [i, orderedIds[i]]
-    );
+    await db.runAsync("UPDATE notes SET sort_order = ? WHERE id = ?", [
+      i,
+      orderedIds[i],
+    ]);
   }
+}
+
+// Get all notes formatted as plain text for export/sharing
+export async function getNotesForExport(db: SQLiteDatabase): Promise<string> {
+  const allNotes = await db.getAllAsync<Note>(
+    "SELECT * FROM notes ORDER BY sort_order ASC",
+  );
+
+  if (allNotes.length === 0) {
+    return "";
+  }
+
+  const lines = allNotes.map((note, index) => {
+    const number = allNotes.length - index;
+    const dateStr = note.date ? ` — ${note.date}` : "";
+    return `${number}. ${note.content}${dateStr}`;
+  });
+
+  return `🐧 My Gratitude Diary\n\n${lines.join("\n")}`;
+}
+
+// Randomize the order of all notes using Fisher-Yates shuffle
+export async function randomizeNoteOrder(db: SQLiteDatabase): Promise<Note[]> {
+  const allNotes = await db.getAllAsync<Note>(
+    "SELECT * FROM notes ORDER BY sort_order ASC",
+  );
+
+  // Fisher-Yates shuffle
+  const shuffled = [...allNotes];
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+  }
+
+  // Persist new order
+  for (let i = 0; i < shuffled.length; i++) {
+    await db.runAsync("UPDATE notes SET sort_order = ? WHERE id = ?", [
+      i,
+      shuffled[i].id,
+    ]);
+  }
+
+  return shuffled;
 }
 
 // Get a random note (for notifications)
 export async function getRandomNote(db: SQLiteDatabase): Promise<Note | null> {
   return await db.getFirstAsync<Note>(
-    'SELECT * FROM notes ORDER BY RANDOM() LIMIT 1'
+    "SELECT * FROM notes ORDER BY RANDOM() LIMIT 1",
   );
 }

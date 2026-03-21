@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useMemo, useEffect } from 'react';
+import { useState, useCallback, useRef, useMemo, useEffect } from "react";
 import {
   View,
   Text,
@@ -8,11 +8,13 @@ import {
   Platform,
   FlatList,
   ListRenderItemInfo,
-} from 'react-native';
-import { useFocusEffect, Link } from 'expo-router';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useSQLiteContext } from 'expo-sqlite';
-import { Ionicons } from '@expo/vector-icons';
+  Share,
+  Alert,
+} from "react-native";
+import { useFocusEffect, Link } from "expo-router";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useSQLiteContext } from "expo-sqlite";
+import { Ionicons } from "@expo/vector-icons";
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
@@ -20,20 +22,28 @@ import Animated, {
   withTiming,
   FadeIn,
   Easing,
-} from 'react-native-reanimated';
+} from "react-native-reanimated";
 import DraggableFlatList, {
   ScaleDecorator,
   RenderItemParams,
-} from 'react-native-draggable-flatlist';
-import { Note, getNotes, createNote, updateNoteOrder, DateRange } from '../db/queries';
-import { DatePickerModal } from '../components/DatePickerModal';
-import { DateRangePickerModal } from '../components/DateRangePickerModal';
-import theme from '../constants/theme';
+} from "react-native-draggable-flatlist";
+import {
+  Note,
+  getNotes,
+  createNote,
+  updateNoteOrder,
+  randomizeNoteOrder,
+  getNotesForExport,
+  DateRange,
+} from "../db/queries";
+import { DatePickerModal } from "../components/DatePickerModal";
+import { DateRangePickerModal } from "../components/DateRangePickerModal";
+import theme from "../constants/theme";
 
 // Japanese-inspired animation timings (from Iki philosophy)
-const DURATION_INSTANT = 100;  // Micro-interactions
-const DURATION_SWIFT = 200;    // Quick feedback
-const DURATION_NATURAL = 300;  // Standard transitions
+const DURATION_INSTANT = 100; // Micro-interactions
+const DURATION_SWIFT = 200; // Quick feedback
+const DURATION_NATURAL = 300; // Standard transitions
 
 // Gentle easing for natural movement
 const EASE_GENTLE = Easing.bezier(0.4, 0, 0.2, 1);
@@ -49,7 +59,13 @@ interface KizenButtonProps {
   disabled?: boolean;
 }
 
-function KizenButton({ onPress, onLongPress, children, className, disabled }: KizenButtonProps) {
+function KizenButton({
+  onPress,
+  onLongPress,
+  children,
+  className,
+  disabled,
+}: KizenButtonProps) {
   const scale = useSharedValue(1);
   const opacity = useSharedValue(1);
 
@@ -60,14 +76,23 @@ function KizenButton({ onPress, onLongPress, children, className, disabled }: Ki
 
   const handlePressIn = () => {
     // Kizen: the anticipation before action
-    scale.value = withTiming(0.97, { duration: DURATION_INSTANT, easing: EASE_GENTLE });
-    opacity.value = withTiming(0.85, { duration: DURATION_INSTANT, easing: EASE_GENTLE });
+    scale.value = withTiming(0.97, {
+      duration: DURATION_INSTANT,
+      easing: EASE_GENTLE,
+    });
+    opacity.value = withTiming(0.85, {
+      duration: DURATION_INSTANT,
+      easing: EASE_GENTLE,
+    });
   };
 
   const handlePressOut = () => {
     // Gentle return, like settling water
     scale.value = withSpring(1, { damping: 15, stiffness: 150 });
-    opacity.value = withTiming(1, { duration: DURATION_SWIFT, easing: EASE_GENTLE });
+    opacity.value = withTiming(1, {
+      duration: DURATION_SWIFT,
+      easing: EASE_GENTLE,
+    });
   };
 
   return (
@@ -86,16 +111,16 @@ function KizenButton({ onPress, onLongPress, children, className, disabled }: Ki
 }
 
 function getToday(): string {
-  return new Date().toISOString().split('T')[0];
+  return new Date().toISOString().split("T")[0];
 }
 
 // Format as YY.MM.DD for display (returns null indicator for unknown dates)
 function formatDateCompact(dateString: string | null): string {
-  if (!dateString) return '—';
+  if (!dateString) return "—";
   const date = new Date(dateString);
   const yy = date.getFullYear().toString().slice(-2);
-  const mm = (date.getMonth() + 1).toString().padStart(2, '0');
-  const dd = date.getDate().toString().padStart(2, '0');
+  const mm = (date.getMonth() + 1).toString().padStart(2, "0");
+  const dd = date.getDate().toString().padStart(2, "0");
   return `${yy}.${mm}.${dd}`;
 }
 
@@ -106,12 +131,24 @@ function formatDateRelative(dateString: string): string {
   const yesterday = new Date(today);
   yesterday.setDate(yesterday.getDate() - 1);
 
-  const dateOnly = new Date(date.getFullYear(), date.getMonth(), date.getDate());
-  const todayOnly = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-  const yesterdayOnly = new Date(yesterday.getFullYear(), yesterday.getMonth(), yesterday.getDate());
+  const dateOnly = new Date(
+    date.getFullYear(),
+    date.getMonth(),
+    date.getDate(),
+  );
+  const todayOnly = new Date(
+    today.getFullYear(),
+    today.getMonth(),
+    today.getDate(),
+  );
+  const yesterdayOnly = new Date(
+    yesterday.getFullYear(),
+    yesterday.getMonth(),
+    yesterday.getDate(),
+  );
 
-  if (dateOnly.getTime() === todayOnly.getTime()) return 'today';
-  if (dateOnly.getTime() === yesterdayOnly.getTime()) return 'yesterday';
+  if (dateOnly.getTime() === todayOnly.getTime()) return "today";
+  if (dateOnly.getTime() === yesterdayOnly.getTime()) return "yesterday";
 
   return formatDateCompact(dateString);
 }
@@ -132,7 +169,7 @@ export default function HomeScreen() {
 
   const [notes, setNotes] = useState<Note[]>([]);
   const [isAdding, setIsAdding] = useState(false);
-  const [inputText, setInputText] = useState('');
+  const [inputText, setInputText] = useState("");
   const [selectedDate, setSelectedDate] = useState(getToday());
   const [showDatePicker, setShowDatePicker] = useState(false);
 
@@ -142,8 +179,8 @@ export default function HomeScreen() {
 
   // Search state
   const [isSearching, setIsSearching] = useState(false);
-  const [searchText, setSearchText] = useState('');
-  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [searchText, setSearchText] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
 
   // Smart animation: track which notes we've already seen
   // This prevents re-triggering FadeIn on existing notes
@@ -169,7 +206,7 @@ export default function HomeScreen() {
   useFocusEffect(
     useCallback(() => {
       fetchNotes();
-    }, [fetchNotes])
+    }, [fetchNotes]),
   );
 
   const handlePlusPress = useCallback(() => {
@@ -195,7 +232,7 @@ export default function HomeScreen() {
       });
 
       // Clear input state first (before triggering list update)
-      setInputText('');
+      setInputText("");
       setSelectedDate(getToday());
 
       // Small delay to let input area animate out before list updates
@@ -205,14 +242,14 @@ export default function HomeScreen() {
         fetchNotes();
       }, 50);
     } catch (error) {
-      console.error('Failed to create note:', error);
+      console.error("Failed to create note:", error);
       // Still close the input on error, but don't lose the text
       setIsAdding(false);
     }
   }, [inputText, selectedDate, db, fetchNotes]);
 
   const handleCancel = useCallback(() => {
-    setInputText('');
+    setInputText("");
     setIsAdding(false);
   }, []);
 
@@ -235,15 +272,40 @@ export default function HomeScreen() {
 
   const handleSearchClose = useCallback(() => {
     setIsSearching(false);
-    setSearchText('');
-    setDebouncedSearch('');
+    setSearchText("");
+    setDebouncedSearch("");
   }, []);
 
-  const handleDragEnd = useCallback(async ({ data }: { data: Note[] }) => {
-    setNotes(data);
-    const orderedIds = data.map(n => n.id);
-    await updateNoteOrder(db, orderedIds);
+  const handleExport = useCallback(async () => {
+    try {
+      const text = await getNotesForExport(db);
+      if (!text) {
+        Alert.alert("Nothing to export", "Add some gratitude notes first.");
+        return;
+      }
+      await Share.share({ message: text });
+    } catch (error) {
+      console.error("Failed to export:", error);
+    }
   }, [db]);
+
+  const handleRandomize = useCallback(async () => {
+    try {
+      const shuffled = await randomizeNoteOrder(db);
+      setNotes(shuffled);
+    } catch (error) {
+      console.error("Failed to randomize:", error);
+    }
+  }, [db]);
+
+  const handleDragEnd = useCallback(
+    async ({ data }: { data: Note[] }) => {
+      setNotes(data);
+      const orderedIds = data.map((n) => n.id);
+      await updateNoteOrder(db, orderedIds);
+    },
+    [db],
+  );
 
   // Newest first - new notes appear right below input
   const sortedNotes = notes;
@@ -263,213 +325,298 @@ export default function HomeScreen() {
   }, [sortedNotes]);
 
   // Render individual note item for regular FlatList
-  const renderNoteItem = useCallback(({ item: note, index }: ListRenderItemInfo<Note>) => {
-    const isNew = newNoteIds.has(note.id);
-    const noteNumber = sortedNotes.length - index;
+  const renderNoteItem = useCallback(
+    ({ item: note, index }: ListRenderItemInfo<Note>) => {
+      const isNew = newNoteIds.has(note.id);
+      const noteNumber = sortedNotes.length - index;
 
-    return (
-      <Animated.View
-        entering={isNew ? FadeIn.duration(DURATION_NATURAL).easing(EASE_GENTLE) : undefined}
-      >
-        <Link href={`/note/${note.id}`} asChild>
-          <KizenButton className="flex-row items-start mb-8">
-            <View className="flex-1 pr-4">
-              <Text className="font-nunito text-moegi text-sm mb-2">
-                {noteNumber}
-              </Text>
-              <Text className="font-nunito text-sumi text-base leading-7">
-                {note.content}
-              </Text>
-            </View>
-            <View className="flex-row items-center mt-6">
-              {!note.date && (
-                <Ionicons
-                  name="calendar-outline"
-                  size={10}
-                  color={theme.colors.sumiLight}
-                  style={{ marginRight: 2, opacity: 0.5 }}
-                />
-              )}
-              <Text className={`font-nunito text-xs ${note.date ? 'text-sumi-light' : 'text-sumi-light opacity-50'}`}>
-                {formatDateCompact(note.date)}
-              </Text>
-            </View>
-          </KizenButton>
-        </Link>
-      </Animated.View>
-    );
-  }, [newNoteIds, sortedNotes.length]);
+      return (
+        <Animated.View
+          entering={
+            isNew
+              ? FadeIn.duration(DURATION_NATURAL).easing(EASE_GENTLE)
+              : undefined
+          }
+        >
+          <Link href={`/note/${note.id}`} asChild>
+            <KizenButton className="flex-row items-start mb-8">
+              <View className="flex-1 pr-4">
+                <Text className="font-nunito text-moegi text-sm mb-2">
+                  {noteNumber}
+                </Text>
+                <Text className="font-nunito text-sumi text-base leading-7">
+                  {note.content}
+                </Text>
+              </View>
+              <View className="flex-row items-center mt-6">
+                {!note.date && (
+                  <Ionicons
+                    name="calendar-outline"
+                    size={10}
+                    color={theme.colors.sumiLight}
+                    style={{ marginRight: 2, opacity: 0.5 }}
+                  />
+                )}
+                <Text
+                  className={`font-nunito text-xs ${note.date ? "text-sumi-light" : "text-sumi-light opacity-50"}`}
+                >
+                  {formatDateCompact(note.date)}
+                </Text>
+              </View>
+            </KizenButton>
+          </Link>
+        </Animated.View>
+      );
+    },
+    [newNoteIds, sortedNotes.length],
+  );
 
   // Render individual note item for DraggableFlatList
-  const renderDraggableItem = useCallback(({ item: note, drag, isActive, getIndex }: RenderItemParams<Note>) => {
-    const index = getIndex() ?? 0;
-    const noteNumber = sortedNotes.length - index;
+  const renderDraggableItem = useCallback(
+    ({ item: note, drag, isActive, getIndex }: RenderItemParams<Note>) => {
+      const index = getIndex() ?? 0;
+      const noteNumber = sortedNotes.length - index;
 
-    return (
-      <ScaleDecorator>
-        <Link href={`/note/${note.id}`} asChild>
-          <KizenButton
-            onLongPress={drag}
-            disabled={isActive}
-            className={`flex-row items-start mb-8 ${isActive ? 'opacity-90' : ''}`}
-          >
-            <View className="flex-1 pr-4">
-              <Text className="font-nunito text-moegi text-sm mb-2">
-                {noteNumber}
-              </Text>
-              <Text className="font-nunito text-sumi text-base leading-7">
-                {note.content}
-              </Text>
-            </View>
-            <View className="flex-row items-center mt-6">
-              {!note.date && (
-                <Ionicons
-                  name="calendar-outline"
-                  size={10}
-                  color={theme.colors.sumiLight}
-                  style={{ marginRight: 2, opacity: 0.5 }}
-                />
-              )}
-              <Text className={`font-nunito text-xs ${note.date ? 'text-sumi-light' : 'text-sumi-light opacity-50'}`}>
-                {formatDateCompact(note.date)}
-              </Text>
-            </View>
-          </KizenButton>
-        </Link>
-      </ScaleDecorator>
-    );
-  }, [sortedNotes.length]);
+      return (
+        <ScaleDecorator>
+          <Link href={`/note/${note.id}`} asChild>
+            <KizenButton
+              onLongPress={drag}
+              disabled={isActive}
+              className={`flex-row items-start mb-8 ${isActive ? "opacity-90" : ""}`}
+            >
+              <View className="flex-1 pr-4">
+                <Text className="font-nunito text-moegi text-sm mb-2">
+                  {noteNumber}
+                </Text>
+                <Text className="font-nunito text-sumi text-base leading-7">
+                  {note.content}
+                </Text>
+              </View>
+              <View className="flex-row items-center mt-6">
+                {!note.date && (
+                  <Ionicons
+                    name="calendar-outline"
+                    size={10}
+                    color={theme.colors.sumiLight}
+                    style={{ marginRight: 2, opacity: 0.5 }}
+                  />
+                )}
+                <Text
+                  className={`font-nunito text-xs ${note.date ? "text-sumi-light" : "text-sumi-light opacity-50"}`}
+                >
+                  {formatDateCompact(note.date)}
+                </Text>
+              </View>
+            </KizenButton>
+          </Link>
+        </ScaleDecorator>
+      );
+    },
+    [sortedNotes.length],
+  );
 
   // Header component for FlatList (includes title, input area, etc.)
-  const ListHeader = useMemo(() => (
-    <>
-      {/* Header row - Title and actions */}
-      <View className="flex-row items-center justify-between mb-2">
-        {isSearching ? (
-          <Animated.View
-            className="flex-1 flex-row items-center mr-3"
-            entering={FadeIn.duration(DURATION_SWIFT).easing(EASE_GENTLE)}
-          >
-            <Ionicons name="search" size={16} color={theme.colors.sumiLight} />
-            <TextInput
-              ref={searchInputRef}
-              className="flex-1 font-nunito text-sumi text-base ml-2 py-1"
-              placeholder="search..."
-              placeholderTextColor={theme.colors.sumiLight}
-              value={searchText}
-              onChangeText={setSearchText}
-              autoCapitalize="none"
-              autoCorrect={false}
-              returnKeyType="search"
-            />
-            <Pressable
-              onPress={handleSearchClose}
-              className="p-1 active:opacity-60"
+  const ListHeader = useMemo(
+    () => (
+      <>
+        {/* Header row - Title and actions */}
+        <View className="flex-row items-center justify-between mb-2">
+          {isSearching ? (
+            <Animated.View
+              className="flex-1 flex-row items-center mr-3"
+              entering={FadeIn.duration(DURATION_SWIFT).easing(EASE_GENTLE)}
             >
-              <Ionicons name="close" size={18} color={theme.colors.sumiLight} />
-            </Pressable>
-          </Animated.View>
-        ) : (
-          <>
-            <Text className="font-nunito text-sumi text-base leading-6">
-              a list I made with reasons{'\n'}that are worth staying alive
-            </Text>
-
-            <View className="flex-row items-center gap-3">
-              {/* Search button */}
+              <Ionicons
+                name="search"
+                size={16}
+                color={theme.colors.sumiLight}
+              />
+              <TextInput
+                ref={searchInputRef}
+                className="flex-1 font-nunito text-sumi text-base ml-2 py-1"
+                placeholder="search..."
+                placeholderTextColor={theme.colors.sumiLight}
+                value={searchText}
+                onChangeText={setSearchText}
+                autoCapitalize="none"
+                autoCorrect={false}
+                returnKeyType="search"
+              />
               <Pressable
-                onPress={handleSearchOpen}
+                onPress={handleSearchClose}
                 className="p-1 active:opacity-60"
               >
-                <Ionicons name="search-outline" size={18} color={theme.colors.sumiLight} />
+                <Ionicons
+                  name="close"
+                  size={18}
+                  color={theme.colors.sumiLight}
+                />
               </Pressable>
+            </Animated.View>
+          ) : (
+            <>
+              <Text className="font-nunito text-sumi text-base leading-6">
+                a list I made with reasons{"\n"}that are worth staying alive
+              </Text>
 
-              {/* Date range filter button */}
-              {dateRange ? (
+              <View className="flex-row items-center gap-3">
+                {/* Search button */}
                 <Pressable
-                  onPress={clearFilter}
-                  className="flex-row items-center active:opacity-60"
-                >
-                  <Text className="font-nunito text-moegi text-xs mr-1">
-                    {formatDateRange(dateRange)}
-                  </Text>
-                  <Ionicons name="close" size={14} color={theme.colors.moegi} />
-                </Pressable>
-              ) : (
-                <Pressable
-                  onPress={() => setShowRangePicker(true)}
+                  onPress={handleSearchOpen}
                   className="p-1 active:opacity-60"
                 >
-                  <Ionicons name="calendar-outline" size={18} color={theme.colors.sumiLight} />
+                  <Ionicons
+                    name="search-outline"
+                    size={18}
+                    color={theme.colors.sumiLight}
+                  />
                 </Pressable>
-              )}
 
-              {/* Settings button */}
-              <Link href="/settings" asChild>
-                <Pressable className="p-1 active:opacity-60">
-                  <Ionicons name="settings-outline" size={18} color={theme.colors.sumiLight} />
+                {/* Date range filter button */}
+                {dateRange ? (
+                  <Pressable
+                    onPress={clearFilter}
+                    className="flex-row items-center active:opacity-60"
+                  >
+                    <Text className="font-nunito text-moegi text-xs mr-1">
+                      {formatDateRange(dateRange)}
+                    </Text>
+                    <Ionicons
+                      name="close"
+                      size={14}
+                      color={theme.colors.moegi}
+                    />
+                  </Pressable>
+                ) : (
+                  <Pressable
+                    onPress={() => setShowRangePicker(true)}
+                    className="p-1 active:opacity-60"
+                  >
+                    <Ionicons
+                      name="calendar-outline"
+                      size={18}
+                      color={theme.colors.sumiLight}
+                    />
+                  </Pressable>
+                )}
+
+                {/* Randomize button */}
+                <Pressable
+                  onPress={handleRandomize}
+                  className="p-1 active:opacity-60"
+                >
+                  <Ionicons
+                    name="shuffle-outline"
+                    size={18}
+                    color={theme.colors.sumiLight}
+                  />
                 </Pressable>
-              </Link>
+
+                {/* Export button */}
+                <Pressable
+                  onPress={handleExport}
+                  className="p-1 active:opacity-60"
+                >
+                  <Ionicons
+                    name="share-outline"
+                    size={18}
+                    color={theme.colors.sumiLight}
+                  />
+                </Pressable>
+
+                {/* Settings button */}
+                <Link href="/settings" asChild>
+                  <Pressable className="p-1 active:opacity-60">
+                    <Ionicons
+                      name="settings-outline"
+                      size={18}
+                      color={theme.colors.sumiLight}
+                    />
+                  </Pressable>
+                </Link>
+              </View>
+            </>
+          )}
+        </View>
+
+        {/* Subtle divider */}
+        <View className="h-px bg-moegi/30 mb-6" />
+
+        {/* Add New Note Area - at top */}
+        {isAdding ? (
+          <Animated.View
+            className="pt-4 pb-6 mb-8"
+            entering={FadeIn.duration(DURATION_SWIFT).easing(EASE_GENTLE)}
+          >
+            <TextInput
+              ref={inputRef}
+              className="font-nunito text-sumi text-xl leading-8 min-h-[80px] mb-6"
+              placeholder="I'm grateful for..."
+              placeholderTextColor={theme.colors.sumiLight}
+              value={inputText}
+              onChangeText={setInputText}
+              multiline
+              textAlignVertical="top"
+            />
+
+            <View className="flex-row items-center justify-between">
+              <KizenButton
+                onPress={() => setShowDatePicker(true)}
+                className="flex-row items-center py-3"
+              >
+                <Ionicons
+                  name="calendar-outline"
+                  size={16}
+                  color={theme.colors.sumiLight}
+                />
+                <Text className="font-nunito text-sumi-light text-sm ml-3">
+                  {formatDateRelative(selectedDate)}
+                </Text>
+              </KizenButton>
+
+              <View className="flex-row items-center gap-8">
+                <KizenButton onPress={handleCancel} className="py-3 px-2">
+                  <Text className="font-nunito text-sumi-light text-base">
+                    cancel
+                  </Text>
+                </KizenButton>
+                <KizenButton onPress={handleAdd} className="py-3 px-2">
+                  <Text className="font-nunito-semibold text-moegi text-base">
+                    add
+                  </Text>
+                </KizenButton>
+              </View>
             </View>
-          </>
+          </Animated.View>
+        ) : (
+          <KizenButton onPress={handlePlusPress} className="py-16 mb-8">
+            <Text className="font-nunito text-sumi-light text-xl leading-9">
+              What brought you joy today?
+            </Text>
+            <View className="h-px bg-moegi/30 mt-5 w-56" />
+          </KizenButton>
         )}
-      </View>
-
-      {/* Subtle divider */}
-      <View className="h-px bg-moegi/30 mb-6" />
-
-      {/* Add New Note Area - at top */}
-      {isAdding ? (
-        <Animated.View
-          className="pt-4 pb-6 mb-8"
-          entering={FadeIn.duration(DURATION_SWIFT).easing(EASE_GENTLE)}
-        >
-          <TextInput
-            ref={inputRef}
-            className="font-nunito text-sumi text-xl leading-8 min-h-[80px] mb-6"
-            placeholder="I'm grateful for..."
-            placeholderTextColor={theme.colors.sumiLight}
-            value={inputText}
-            onChangeText={setInputText}
-            multiline
-            textAlignVertical="top"
-          />
-
-          <View className="flex-row items-center justify-between">
-            <KizenButton
-              onPress={() => setShowDatePicker(true)}
-              className="flex-row items-center py-3"
-            >
-              <Ionicons name="calendar-outline" size={16} color={theme.colors.sumiLight} />
-              <Text className="font-nunito text-sumi-light text-sm ml-3">
-                {formatDateRelative(selectedDate)}
-              </Text>
-            </KizenButton>
-
-            <View className="flex-row items-center gap-8">
-              <KizenButton onPress={handleCancel} className="py-3 px-2">
-                <Text className="font-nunito text-sumi-light text-base">cancel</Text>
-              </KizenButton>
-              <KizenButton onPress={handleAdd} className="py-3 px-2">
-                <Text className="font-nunito-semibold text-moegi text-base">add</Text>
-              </KizenButton>
-            </View>
-          </View>
-        </Animated.View>
-      ) : (
-        <KizenButton
-          onPress={handlePlusPress}
-          className="py-16 mb-8"
-        >
-          <Text className="font-nunito text-sumi-light text-xl leading-9">
-            What brought you joy today?
-          </Text>
-          <View className="h-px bg-moegi/30 mt-5 w-56" />
-        </KizenButton>
-      )}
-
-    </>
-  ), [dateRange, isAdding, inputText, selectedDate, sortedNotes.length, handleCancel, handleAdd, handlePlusPress, clearFilter, isSearching, searchText, handleSearchOpen, handleSearchClose]);
+      </>
+    ),
+    [
+      dateRange,
+      isAdding,
+      inputText,
+      selectedDate,
+      sortedNotes.length,
+      handleCancel,
+      handleAdd,
+      handlePlusPress,
+      clearFilter,
+      isSearching,
+      searchText,
+      handleSearchOpen,
+      handleSearchClose,
+      handleExport,
+      handleRandomize,
+    ],
+  );
 
   // Empty state component
   const ListEmpty = useMemo(() => {
@@ -480,8 +627,8 @@ export default function HomeScreen() {
           {debouncedSearch
             ? `no notes found`
             : dateRange
-            ? `No notes in this period`
-            : "Start adding your\ngratitude notes"}
+              ? `No notes in this period`
+              : "Start adding your\ngratitude notes"}
         </Text>
         {debouncedSearch ? (
           <Pressable onPress={handleSearchClose} className="mt-4">
@@ -496,17 +643,20 @@ export default function HomeScreen() {
     );
   }, [dateRange, debouncedSearch, isAdding, clearFilter, handleSearchClose]);
 
-  const contentContainerStyle = useMemo(() => ({
-    paddingTop: insets.top + 48,
-    paddingBottom: insets.bottom + 32,
-    paddingHorizontal: 32,
-    flexGrow: 1,
-  }), [insets.top, insets.bottom]);
+  const contentContainerStyle = useMemo(
+    () => ({
+      paddingTop: insets.top + 48,
+      paddingBottom: insets.bottom + 32,
+      paddingHorizontal: 32,
+      flexGrow: 1,
+    }),
+    [insets.top, insets.bottom],
+  );
 
   return (
     <View className="flex-1 bg-washi">
       <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
         className="flex-1"
       >
         {isDragEnabled ? (
